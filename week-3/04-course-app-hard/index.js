@@ -49,9 +49,8 @@ async function authenticateAdmin(req, res, next) {
 }
 
 async function authenticateUser(req, res, next) {
-  const authHeader = req.headers["Authorization"];
+  const authHeader = req.headers["authorization"];
   const token = (authHeader && authHeader.split(" ")[1]) || null;
-
   if (token === null) return res.sendStatus(401);
   jwt.verify(token, userJwtSecret, (err, user) => {
     if (err) return res.sendStatus(403);
@@ -88,7 +87,7 @@ app.post("/admin/login", (req, res) => {
     return res.status(401).json({ message: "Please sign up" });
   }
   const token = jwt.sign({ username, password }, adminJwtSecret);
-  res.status(200).json({ message: "Logged in successfully", token });
+  res.status(200).json({ message: "Admin logged in successfully", token });
 });
 
 app.post("/admin/courses", authenticateAdmin, async (req, res) => {
@@ -117,24 +116,74 @@ app.get("/admin/courses", authenticateAdmin, async (req, res) => {
 });
 
 // User routes
-app.post("/users/signup", (req, res) => {
+app.post("/users/signup", async (req, res) => {
   // logic to sign up user
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(401);
+  }
+  let user = await User.find({ username, password });
+  if (user?.length > 0) {
+    return res.status(401).json({ message: "User already exist" });
+  }
+  user = new User({ username, password });
+  const token = jwt.sign({ username, password }, userJwtSecret);
+  await user.save();
+  res.status(200).json({ message: "User created successfully", token });
 });
 
 app.post("/users/login", (req, res) => {
   // logic to log in user
+  const { username, password } = req.headers;
+  if (!username || !password) {
+    return res.status(401);
+  }
+  const user = User.find({ username, password });
+  if (!user) {
+    return res.status(401).json({ message: "Please sign up" });
+  }
+  const token = jwt.sign({ username, password }, userJwtSecret);
+  res.status(200).json({ message: "User logged in successfully", token });
 });
 
-app.get("/users/courses", (req, res) => {
+app.get("/users/courses", authenticateUser, async (req, res) => {
   // logic to list all courses
+  let courses = await Course.find();
+  res.status(200).json({ courses });
 });
 
-app.post("/users/courses/:courseId", (req, res) => {
+app.post("/users/courses/:courseId", authenticateUser, async (req, res) => {
   // logic to purchase a course
+  try {
+    const courseId = req.params["courseId"];
+    const course = await Course.findById(courseId).exec();
+    const username = req.user.username;
+    if (!course) {
+      return res.status(300).json({ message: "Course not found.." });
+    }
+    const doc = await User.findOneAndUpdate(
+      { username },
+      {
+        $addToSet: { purchasedCourses: course._id },
+      },
+      { new: true }
+    );
+    if (!doc) {
+      return res.status(300).json({ message: "No Docs updated.." });
+    }
+    res.status(200).json({ message: "Course purchased successfully" });
+  } catch (err) {
+    res.status(400).json({ message: "Something went wrong" });
+  }
 });
 
-app.get("/users/purchasedCourses", (req, res) => {
+app.get("/users/purchasedCourses", authenticateUser, async (req, res) => {
   // logic to view purchased courses
+  const currentUser = await User.findOne({ username: req.user.username })
+    .populate("purchasedCourses")
+    .exec();
+  const purchasedCourses = currentUser.purchasedCourses;
+  res.status(200).json({ purchasedCourses });
 });
 
 app.listen(3000, () => {
